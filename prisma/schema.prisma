@@ -1,0 +1,338 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserStatus {
+  ACTIVE
+  LOCKED
+  SUSPENDED
+}
+
+enum CustomerType {
+  REGULAR
+  WHOLESALE
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum AdminRole {
+  SUPER_ADMIN
+  ORDER_MANAGER
+  STAFF
+}
+
+enum ProductStatus {
+  ACTIVE
+  DRAFT
+  OUT_OF_STOCK
+}
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  PROCESSING
+  DISPATCHED
+  DELIVERED
+  CANCELLED
+}
+
+enum DeliveryMethod {
+  STORE_PICKUP_COLOMBO
+  STORE_PICKUP_KURUNEGALA
+  DOMEX_COURIER
+  PICKME_FLASH
+}
+
+enum PaymentMethod {
+  BANK_TRANSFER
+  CASH_ON_DELIVERY
+  CARD_GATEWAY
+}
+
+enum PaymentStatus {
+  PENDING_VERIFICATION
+  PAID
+  FAILED
+}
+
+enum PosSyncStatus {
+  PENDING
+  SYNCED
+  FAILED
+}
+
+enum SyncDirection {
+  INBOUND_PULL
+  OUTBOUND_PUSH
+}
+
+// --------------------------------------------------------
+// Identity & Authentication
+// --------------------------------------------------------
+
+model User {
+  id              String           @id @default(uuid())
+  phone           String           @unique
+  email           String?          @unique
+  passwordHash    String?
+  status          UserStatus       @default(ACTIVE)
+  otpRetryCount   Int              @default(0)
+  lockedUntil     DateTime?
+  customerProfile CustomerProfile?
+  adminUser       AdminUser?
+  orders          Order[]
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  @@index([phone])
+  @@index([email])
+}
+
+model OtpSession {
+  id         String   @id @default(uuid())
+  phone      String
+  otpCode    String
+  purpose    String   @default("LOGIN") // LOGIN, REGISTER, RESET
+  expiresAt  DateTime
+  isVerified Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  @@index([phone, isVerified])
+}
+
+model CustomerProfile {
+  id                     String          @id @default(uuid())
+  userId                 String          @unique
+  user                   User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  customerType           CustomerType    @default(REGULAR)
+  wholesaleCustomerId    String?         @unique // POS-assigned wholesale code (e.g. WS-10023)
+  fullName               String
+  businessName           String?
+  businessAddress        String?
+  ownerName              String?
+  brcDocumentUrl         String?
+  approvalStatus         ApprovalStatus  @default(PENDING)
+  linkedRegularProfileId String?
+  addresses              Address[]
+  createdAt              DateTime        @default(now())
+  updatedAt              DateTime        @updatedAt
+
+  @@index([wholesaleCustomerId])
+  @@index([customerType, approvalStatus])
+}
+
+model Address {
+  id                String          @id @default(uuid())
+  customerProfileId String
+  customerProfile   CustomerProfile @relation(fields: [customerProfileId], references: [id], onDelete: Cascade)
+  addressLine       String
+  districtId        String
+  district          District        @relation(fields: [districtId], references: [id])
+  cityId            String
+  city              City            @relation(fields: [cityId], references: [id])
+  postalCode        String?
+  isDefault         Boolean         @default(false)
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+}
+
+model AdminUser {
+  id          String    @id @default(uuid())
+  userId      String    @unique
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  username    String    @unique
+  role        AdminRole @default(STAFF)
+  permissions Json?     // Granular permission flags
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+// --------------------------------------------------------
+// Catalog & Products
+// --------------------------------------------------------
+
+model Category {
+  id          String     @id @default(uuid())
+  title       String
+  slug        String     @unique
+  imgSrc      String?
+  description String?
+  parentId    String?
+  parent      Category?  @relation("SubCategories", fields: [parentId], references: [id])
+  children    Category[] @relation("SubCategories")
+  sortOrder   Int        @default(0)
+  isWider     Boolean    @default(false)
+  products    Product[]
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  @@index([slug])
+}
+
+model Brand {
+  id           String    @id @default(uuid())
+  name         String
+  slug         String    @unique
+  imgSrc       String?
+  discountText String?
+  isFeatured   Boolean   @default(false)
+  products     Product[]
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([slug])
+}
+
+model Product {
+  id             String         @id @default(uuid())
+  sku            String         @unique
+  posItemCode    String?        @unique // Unique identifier in TransAsia POS system
+  title          String
+  slug           String         @unique
+  description    String?
+  basePrice      Decimal        @db.Decimal(12, 2)
+  wholesalePrice Decimal?       @db.Decimal(12, 2)
+  stockQuantity  Int            @default(0)
+  status         ProductStatus  @default(ACTIVE)
+  isPosSynced    Boolean        @default(true) // Whether POS owns price/stock (FR-21)
+  categoryId     String?
+  category       Category?      @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  brandId        String?
+  brand          Brand?         @relation(fields: [brandId], references: [id], onDelete: SetNull)
+  images         ProductImage[]
+  orderItems     OrderItem[]
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  @@index([posItemCode])
+  @@index([slug])
+  @@index([status, stockQuantity])
+}
+
+model ProductImage {
+  id        String   @id @default(uuid())
+  productId String
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  url       String
+  isPrimary Boolean  @default(false)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@index([productId, isPrimary])
+}
+
+// --------------------------------------------------------
+// Orders & Checkout
+// --------------------------------------------------------
+
+model Order {
+  id                   String         @id @default(uuid())
+  orderNumber          String         @unique // e.g. TA-2026-0001
+  userId               String
+  user                 User           @relation(fields: [userId], references: [id])
+  customerTypeAtOrder  CustomerType   @default(REGULAR)
+  status               OrderStatus    @default(PENDING)
+  subtotal             Decimal        @db.Decimal(12, 2)
+  discount             Decimal        @default(0) @db.Decimal(12, 2)
+  shippingFee          Decimal        @default(0) @db.Decimal(12, 2)
+  totalAmount          Decimal        @db.Decimal(12, 2)
+  deliveryMethod       DeliveryMethod @default(DOMEX_COURIER)
+  shippingAddress      Json           // Preserves immutable snapshot of delivery address
+  trackingNumber       String?
+  notes                String?
+  posSyncStatus        PosSyncStatus  @default(PENDING)
+  posOrderRef          String?
+  items                OrderItem[]
+  payments             Payment[]
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
+
+  @@index([orderNumber])
+  @@index([userId, status])
+  @@index([posSyncStatus])
+}
+
+model OrderItem {
+  id         String   @id @default(uuid())
+  orderId    String
+  order      Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId  String
+  product    Product  @relation(fields: [productId], references: [id])
+  title      String
+  unitPrice  Decimal  @db.Decimal(12, 2)
+  quantity   Int      // Enforced max 20 per item (FR-29)
+  totalPrice Decimal  @db.Decimal(12, 2)
+
+  @@index([orderId])
+}
+
+model Payment {
+  id             String        @id @default(uuid())
+  orderId        String
+  order          Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  paymentMethod  PaymentMethod
+  status         PaymentStatus @default(PENDING_VERIFICATION)
+  bankSlipUrl    String?
+  transactionRef String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  @@index([orderId])
+}
+
+// --------------------------------------------------------
+// Sri Lanka Locations (FR-31, FR-32)
+// --------------------------------------------------------
+
+model District {
+  id        String    @id @default(uuid())
+  name      String    @unique
+  code      String    @unique
+  cities    City[]
+  addresses Address[]
+}
+
+model City {
+  id         String    @id @default(uuid())
+  districtId String
+  district   District  @relation(fields: [districtId], references: [id], onDelete: Cascade)
+  name       String
+  postalCode String?
+  addresses  Address[]
+
+  @@unique([districtId, name])
+  @@index([name])
+}
+
+// --------------------------------------------------------
+// System Configuration & Audit
+// --------------------------------------------------------
+
+model StoreSetting {
+  id          String   @id @default(uuid())
+  key         String   @unique
+  value       Json
+  description String?
+  updatedAt   DateTime @updatedAt
+}
+
+model PosSyncLog {
+  id           String        @id @default(uuid())
+  direction    SyncDirection
+  entityType   String        // PRODUCT, ORDER, STOCK
+  status       String        // SUCCESS, ERROR
+  payload      Json?
+  errorMessage String?
+  createdAt    DateTime      @default(now())
+
+  @@index([direction, createdAt])
+}
