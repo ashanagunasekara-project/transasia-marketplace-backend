@@ -84,6 +84,8 @@ function formatStockAndPrice(product: any, isApprovedWholesale: boolean) {
     brand: product.brand,
     images: product.images,
     primaryImage: product.images.find((img: any) => img.isPrimary)?.url || product.images[0]?.url || "/assets/images/placeholder.webp",
+    createdAt: product.createdAt,
+    salesCount: product._count?.orderItems ?? 0,
   };
 }
 
@@ -207,6 +209,7 @@ router.get("/", async (req: Request, res: Response) => {
           category: true,
           brand: true,
           images: { orderBy: { sortOrder: "asc" } },
+          _count: { select: { orderItems: true } },
         },
         orderBy,
         skip,
@@ -519,6 +522,7 @@ router.get("/:identifier", async (req: Request, res: Response) => {
         category: true,
         brand: true,
         images: { orderBy: { sortOrder: "asc" } },
+        _count: { select: { orderItems: true } },
       },
     });
 

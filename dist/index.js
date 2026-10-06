@@ -22,6 +22,7 @@ const admin_routes_1 = __importDefault(require("./routes/admin.routes"));
 const upload_routes_1 = __importDefault(require("./routes/upload.routes"));
 const banner_routes_1 = __importDefault(require("./routes/banner.routes"));
 const error_middleware_1 = require("./middlewares/error.middleware");
+const posSync_1 = require("./lib/posSync");
 const app = (0, express_1.default)();
 const PORT = process.env.PORT || 5000;
 // Enable CORS for Storefront (port 3000) and Admin (port 4000 / 3001)
@@ -75,6 +76,8 @@ app.listen(PORT, () => {
     console.log(` Health check: http://localhost:${PORT}/health`);
     console.log(` Connected to PostgreSQL container on localhost:5432`);
     console.log(`======================================================\n`);
+    // Start background POS sync cron job
+    (0, posSync_1.startPosSyncCron)();
 });
 exports.default = app;
 //# sourceMappingURL=index.js.map
