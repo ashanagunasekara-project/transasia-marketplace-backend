@@ -8,6 +8,7 @@ const bcryptjs_1 = __importDefault(require("bcryptjs"));
 const prisma_1 = require("../lib/prisma");
 const jwt_1 = require("../lib/jwt");
 const auth_middleware_1 = require("../middlewares/auth.middleware");
+const posSync_1 = require("../lib/posSync");
 const router = (0, express_1.Router)();
 // ----------------------------------------------------
 // 1. Admin Login (Email/Username + Password)
@@ -511,6 +512,47 @@ router.get("/dashboard/metrics", async (req, res) => {
     }
     catch (error) {
         res.status(500).json({ success: false, message: "Failed to fetch dashboard metrics" });
+    }
+});
+// ----------------------------------------------------
+// 8. POS Wholesale Sync Management
+// ----------------------------------------------------
+router.post("/pos-sync/trigger", async (req, res) => {
+    try {
+        const pushResult = await (0, posSync_1.pushPendingWholesaleRegistrations)();
+        const pullResult = await (0, posSync_1.pullApprovedWholesaleFromPOS)();
+        res.json({
+            success: true,
+            message: "POS Wholesale Sync executed successfully",
+            summary: {
+                pushedToPos: pushResult.pushedCount,
+                pushErrors: pushResult.errors,
+                approvedFromPos: pullResult.approvedCount,
+                rejectedFromPos: pullResult.rejectedCount,
+                pullErrors: pullResult.errors,
+            },
+        });
+    }
+    catch (error) {
+        console.error("pos-sync trigger error:", error);
+        res.status(500).json({ success: false, message: error.message || "POS Sync failed" });
+    }
+});
+router.get("/pos-sync/logs", async (req, res) => {
+    try {
+        const { limit = "20" } = req.query;
+        const take = parseInt(String(limit), 10);
+        const logs = await prisma_1.prisma.posSyncLog.findMany({
+            take,
+            orderBy: { createdAt: "desc" },
+        });
+        res.json({
+            success: true,
+            data: logs,
+        });
+    }
+    catch (error) {
+        res.status(500).json({ success: false, message: "Failed to fetch POS sync logs" });
     }
 });
 exports.default = router;
