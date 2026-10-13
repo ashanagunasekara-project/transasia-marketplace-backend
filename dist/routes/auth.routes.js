@@ -9,6 +9,7 @@ const prisma_1 = require("../lib/prisma");
 const jwt_1 = require("../lib/jwt");
 const sms_1 = require("../lib/sms");
 const auth_middleware_1 = require("../middlewares/auth.middleware");
+const posSync_1 = require("../lib/posSync");
 const router = (0, express_1.Router)();
 const OTP_MAX_RETRIES = parseInt(process.env.OTP_MAX_RETRIES || "3", 10);
 const OTP_LOCKOUT_HOURS = parseInt(process.env.OTP_LOCKOUT_HOURS || "24", 10);
@@ -147,7 +148,7 @@ router.get("/wholesale-lookup/:wholesaleCustomerId", async (req, res) => {
             success: true,
             data: {
                 wholesaleCustomerId: profile.wholesaleCustomerId,
-                businessName: profile.businessName || profile.user.name,
+                businessName: profile.businessName || profile.fullName || null,
                 maskedPhone,
             },
         });
@@ -338,6 +339,8 @@ router.post("/register-wholesale", async (req, res) => {
                         },
                     });
                     const authData = formatAuthUserResponse({ ...existingUser, customerProfile: updatedProfile });
+                    // Asynchronously trigger POS sync to push registration immediately
+                    (0, posSync_1.pushPendingWholesaleRegistrations)().catch((e) => console.warn("[POS SYNC] Async push on upgrade failed:", e.message));
                     return res.status(200).json({
                         success: true,
                         message: "Wholesale application submitted for your account. Pricing will update upon approval.",
@@ -374,6 +377,8 @@ router.post("/register-wholesale", async (req, res) => {
             include: { customerProfile: true },
         });
         const authData = formatAuthUserResponse(user);
+        // Asynchronously trigger POS sync to push registration immediately
+        (0, posSync_1.pushPendingWholesaleRegistrations)().catch((e) => console.warn("[POS SYNC] Async push on register failed:", e.message));
         res.status(201).json({
             success: true,
             message: "Wholesale application submitted successfully. Pricing will update upon approval.",
