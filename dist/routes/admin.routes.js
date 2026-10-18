@@ -186,6 +186,11 @@ router.get("/customers", async (req, res) => {
                             orders: {
                                 select: { id: true, totalAmount: true, status: true },
                             },
+                            cart: {
+                                include: {
+                                    items: true,
+                                },
+                            },
                         },
                     },
                     addresses: true,
@@ -201,6 +206,7 @@ router.get("/customers", async (req, res) => {
             const totalSpent = orders
                 .filter((o) => o.status !== "CANCELLED")
                 .reduce((sum, o) => sum + Number(o.totalAmount || 0), 0);
+            const cartItemsCount = p.user?.cart?.items?.reduce((sum, it) => sum + it.quantity, 0) || 0;
             const isLocked = Boolean(p.user?.lockedUntil && new Date(p.user.lockedUntil) > new Date());
             return {
                 id: p.id,
@@ -222,6 +228,8 @@ router.get("/customers", async (req, res) => {
                 createdAt: p.createdAt,
                 ordersCount: orders.length,
                 totalSpent,
+                cartItemsCount,
+                hasActiveCart: cartItemsCount > 0,
             };
         });
         res.json({
@@ -553,6 +561,188 @@ router.get("/pos-sync/logs", async (req, res) => {
     }
     catch (error) {
         res.status(500).json({ success: false, message: "Failed to fetch POS sync logs" });
+    }
+});
+// ----------------------------------------------------
+// 9. Shopping Cart Management & Abandoned Cart Recovery
+// ----------------------------------------------------
+router.get("/carts/abandoned", async (req, res) => {
+    try {
+        const { page = "1", limit = "20" } = req.query;
+        const take = Math.max(1, parseInt(String(limit), 10) || 20);
+        const skip = (Math.max(1, parseInt(String(page), 10) || 1) - 1) * take;
+        const [carts, totalCartsCount] = await Promise.all([
+            prisma_1.prisma.cart.findMany({
+                where: {
+                    items: { some: {} },
+                },
+                include: {
+                    user: {
+                        include: {
+                            customerProfile: true,
+                        },
+                    },
+                    items: {
+                        include: {
+                            product: {
+                                include: {
+                                    images: { where: { isPrimary: true }, take: 1 },
+                                    brand: true,
+                                    category: true,
+                                },
+                            },
+                        },
+                        orderBy: { createdAt: "desc" },
+                    },
+                },
+                orderBy: { updatedAt: "desc" },
+                skip,
+                take,
+            }),
+            prisma_1.prisma.cart.count({
+                where: { items: { some: {} } },
+            }),
+        ]);
+        const formattedCarts = carts.map((cart) => {
+            const isWholesale = cart.user?.customerProfile?.customerType === "WHOLESALE" &&
+                cart.user?.customerProfile?.approvalStatus === "APPROVED";
+            let cartSubtotal = 0;
+            let totalItemCount = 0;
+            const items = cart.items.map((item) => {
+                const prod = item.product;
+                const unitPrice = isWholesale && prod.wholesalePrice !== null
+                    ? Number(prod.wholesalePrice)
+                    : Number(prod.basePrice);
+                const lineTotal = unitPrice * item.quantity;
+                cartSubtotal += lineTotal;
+                totalItemCount += item.quantity;
+                return {
+                    id: item.id,
+                    productId: prod.id,
+                    title: prod.title,
+                    sku: prod.sku,
+                    quantity: item.quantity,
+                    unitPrice,
+                    totalPrice: lineTotal,
+                    stockQuantity: prod.stockQuantity,
+                    image: prod.images[0]?.url || null,
+                };
+            });
+            return {
+                id: cart.id,
+                userId: cart.userId,
+                sessionId: cart.sessionId,
+                customerType: cart.user
+                    ? cart.user.customerProfile?.customerType || "REGULAR"
+                    : "GUEST",
+                customerName: cart.user?.customerProfile?.fullName ||
+                    cart.user?.customerProfile?.businessName ||
+                    "Guest Shopper",
+                phone: cart.user?.phone || null,
+                email: cart.user?.email || null,
+                businessName: cart.user?.customerProfile?.businessName || null,
+                wholesaleCustomerId: cart.user?.customerProfile?.wholesaleCustomerId || null,
+                itemsCount: totalItemCount,
+                subtotal: Math.round(cartSubtotal * 100) / 100,
+                items,
+                createdAt: cart.createdAt,
+                updatedAt: cart.updatedAt,
+            };
+        });
+        const allCartsWithItems = await prisma_1.prisma.cart.findMany({
+            where: { items: { some: {} } },
+            select: { userId: true },
+        });
+        const guestCarts = allCartsWithItems.filter((c) => !c.userId).length;
+        const customerCarts = allCartsWithItems.filter((c) => Boolean(c.userId)).length;
+        res.json({
+            success: true,
+            data: {
+                carts: formattedCarts,
+                stats: {
+                    totalCarts: totalCartsCount,
+                    guestCarts,
+                    customerCarts,
+                },
+                pagination: {
+                    page: Math.max(1, parseInt(String(page), 10) || 1),
+                    limit: take,
+                    totalPages: Math.ceil(totalCartsCount / take),
+                },
+            },
+        });
+    }
+    catch (error) {
+        console.error("admin get carts error:", error);
+        res.status(500).json({ success: false, message: "Failed to fetch carts" });
+    }
+});
+router.get("/customers/:id/cart", async (req, res) => {
+    try {
+        const { id } = req.params;
+        const cart = await prisma_1.prisma.cart.findFirst({
+            where: {
+                OR: [
+                    { userId: id },
+                    { user: { customerProfile: { id } } },
+                ],
+            },
+            include: {
+                items: {
+                    include: {
+                        product: {
+                            include: {
+                                images: { where: { isPrimary: true }, take: 1 },
+                            },
+                        },
+                    },
+                },
+            },
+        });
+        if (!cart) {
+            return res.json({
+                success: true,
+                data: {
+                    items: [],
+                    subtotal: 0,
+                    totalItems: 0,
+                },
+            });
+        }
+        let subtotal = 0;
+        let totalItems = 0;
+        const items = cart.items.map((item) => {
+            const prod = item.product;
+            const unitPrice = Number(prod.basePrice);
+            const lineTotal = unitPrice * item.quantity;
+            subtotal += lineTotal;
+            totalItems += item.quantity;
+            return {
+                id: item.id,
+                productId: prod.id,
+                title: prod.title,
+                sku: prod.sku,
+                quantity: item.quantity,
+                unitPrice,
+                totalPrice: lineTotal,
+                stockQuantity: prod.stockQuantity,
+                image: prod.images[0]?.url || null,
+            };
+        });
+        res.json({
+            success: true,
+            data: {
+                id: cart.id,
+                items,
+                subtotal: Math.round(subtotal * 100) / 100,
+                totalItems,
+                updatedAt: cart.updatedAt,
+            },
+        });
+    }
+    catch (error) {
+        console.error("admin customer cart error:", error);
+        res.status(500).json({ success: false, message: "Failed to fetch customer cart" });
     }
 });
 exports.default = router;
