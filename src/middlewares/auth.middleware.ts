@@ -46,6 +46,27 @@ export async function authenticateToken(
   }
 }
 
+export async function optionalAuthenticateToken(
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return next();
+  }
+
+  const token = authHeader.split(" ")[1];
+  try {
+    const decoded = verifyToken(token);
+    req.user = decoded;
+  } catch (error) {
+    // If token is invalid or expired, continue as guest
+    req.user = undefined;
+  }
+  next();
+}
+
 export function requireAdmin(allowedRoles: string[] = ["SUPER_ADMIN", "ORDER_MANAGER", "STAFF"]) {
   return async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     if (!req.user || !req.user.userId) {

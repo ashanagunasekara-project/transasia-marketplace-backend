@@ -17,10 +17,19 @@ function generateSlug(title) {
 // ----------------------------------------------------
 router.get("/", async (req, res) => {
     try {
+        const { onlyParents } = req.query;
+        const where = {};
+        if (onlyParents === "true") {
+            where.parentId = null;
+        }
         const categories = await prisma_1.prisma.category.findMany({
+            where,
             include: {
-                children: true,
-                _count: { select: { products: true } },
+                children: {
+                    orderBy: { sortOrder: "asc" },
+                },
+                parent: true,
+                _count: { select: { products: true, children: true } },
             },
             orderBy: { sortOrder: "asc" },
         });
@@ -36,7 +45,10 @@ router.get("/", async (req, res) => {
                 description: cat.description,
                 isWider: cat.isWider,
                 parentId: cat.parentId,
+                parentName: cat.parent?.title || null,
+                parentSlug: cat.parent?.slug || null,
                 subCategories: cat.children,
+                subCategoriesCount: cat.children?.length || cat._count.children || 0,
                 productCount: cat._count.products,
                 count: cat._count.products, // alias for admin tables
                 status: "published", // default for admin display

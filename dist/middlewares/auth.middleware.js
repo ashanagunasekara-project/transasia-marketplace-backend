@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.authenticateToken = authenticateToken;
+exports.optionalAuthenticateToken = optionalAuthenticateToken;
 exports.requireAdmin = requireAdmin;
 const jwt_1 = require("../lib/jwt");
 const prisma_1 = require("../lib/prisma");
@@ -35,6 +36,22 @@ async function authenticateToken(req, res, next) {
     catch (error) {
         return res.status(401).json({ success: false, message: "Invalid or expired token" });
     }
+}
+async function optionalAuthenticateToken(req, res, next) {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+        return next();
+    }
+    const token = authHeader.split(" ")[1];
+    try {
+        const decoded = (0, jwt_1.verifyToken)(token);
+        req.user = decoded;
+    }
+    catch (error) {
+        // If token is invalid or expired, continue as guest
+        req.user = undefined;
+    }
+    next();
 }
 function requireAdmin(allowedRoles = ["SUPER_ADMIN", "ORDER_MANAGER", "STAFF"]) {
     return async (req, res, next) => {

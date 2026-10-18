@@ -87,7 +87,7 @@ router.get("/admin/all", async (req, res) => {
     try {
         const products = await prisma_1.prisma.product.findMany({
             include: {
-                category: true,
+                category: { include: { parent: true } },
                 brand: true,
                 images: { orderBy: { sortOrder: "asc" } },
             },
@@ -113,6 +113,8 @@ router.get("/admin/all", async (req, res) => {
                 slug: p.slug,
                 category: p.category?.title || "Unassigned",
                 categoryId: p.categoryId,
+                parentCategory: p.category?.parent?.title || null,
+                parentCategoryId: p.category?.parentId || null,
                 brand: p.brand?.name || "Unassigned",
                 brandId: p.brandId,
                 price: Number(p.basePrice),
@@ -146,11 +148,17 @@ router.get("/admin/all", async (req, res) => {
 // ----------------------------------------------------
 router.get("/", async (req, res) => {
     try {
-        const { category, brand, search, minPrice, maxPrice, page = "1", limit = "12", sort = "newest", } = req.query;
+        const { category, subCategory, brand, search, minPrice, maxPrice, page = "1", limit = "12", sort = "newest", } = req.query;
         const isApprovedWholesale = await determineWholesalePricing(req);
         const where = { status: "ACTIVE" };
-        if (category) {
-            where.category = { slug: String(category) };
+        if (subCategory) {
+            where.category = { slug: String(subCategory) };
+        }
+        else if (category) {
+            where.OR = [
+                { category: { slug: String(category) } },
+                { category: { parent: { slug: String(category) } } },
+            ];
         }
         if (brand) {
             where.brand = { slug: String(brand) };
@@ -182,7 +190,7 @@ router.get("/", async (req, res) => {
             prisma_1.prisma.product.findMany({
                 where,
                 include: {
-                    category: true,
+                    category: { include: { parent: true } },
                     brand: true,
                     images: { orderBy: { sortOrder: "asc" } },
                     _count: { select: { orderItems: true } },
@@ -440,7 +448,7 @@ router.get("/:identifier", async (req, res) => {
                 OR: [{ id: identifier }, { slug: identifier }, { sku: identifier }],
             },
             include: {
-                category: true,
+                category: { include: { parent: true } },
                 brand: true,
                 images: { orderBy: { sortOrder: "asc" } },
                 _count: { select: { orderItems: true } },

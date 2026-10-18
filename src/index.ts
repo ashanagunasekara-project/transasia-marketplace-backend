@@ -18,6 +18,7 @@ import settingRoutes from "./routes/setting.routes";
 import adminRoutes from "./routes/admin.routes";
 import uploadRoutes from "./routes/upload.routes";
 import bannerRoutes from "./routes/banner.routes";
+import cartRoutes from "./routes/cart.routes";
 import { errorHandler } from "./middlewares/error.middleware";
 import { startPosSyncCron } from "./lib/posSync";
 
@@ -59,6 +60,7 @@ app.use("/api/products", productRoutes);
 app.use("/api/categories", categoryRoutes);
 app.use("/api/brands", brandRoutes);
 app.use("/api/orders", orderRoutes);
+app.use("/api/cart", cartRoutes);
 app.use("/api/locations", locationRoutes);
 app.use("/api/settings", settingRoutes);
 app.use("/api/admin", adminRoutes);
