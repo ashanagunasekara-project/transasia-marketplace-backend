@@ -51,7 +51,7 @@ async function generateOrderNumber(): Promise<string> {
 router.post("/", authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userId = req.user!.userId;
-    const { items, deliveryMethod, shippingAddress, paymentMethod, notes } = req.body;
+    const { items, deliveryMethod, shippingAddress, paymentMethod, notes, deliveryTimeSlot } = req.body;
 
     if (!items || !Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ success: false, message: "Cart is empty" });
@@ -123,18 +123,43 @@ router.post("/", authenticateToken, async (req: AuthenticatedRequest, res: Respo
       });
     }
 
-    // Shipping fee calculation
+    // Shipping fee calculation using configured rates
     let shippingFee = 0;
-    if (deliveryMethod === "DOMEX_COURIER") {
-      shippingFee = 450; // Standard Domex starting rate
+    const shippingSetting = await prisma.storeSetting.findUnique({
+      where: { key: "shipping_rates" },
+    });
+    const shippingRates = (shippingSetting?.value as any) || {
+      colomboCourierFee: 350,
+      outOfColomboCourierFee: 450,
+      freeShippingThreshold: 15000,
+      enableFreeShipping: true,
+    };
+
+    const districtStr = (shippingAddress?.district || "").toString().toLowerCase();
+    const cityStr = (shippingAddress?.city || "").toString().toLowerCase();
+    const postcodeStr = (shippingAddress?.postcode || "").toString();
+    const isColombo = districtStr === "colombo" || cityStr.includes("colombo") || postcodeStr.startsWith("00");
+
+    if (shippingRates.enableFreeShipping && subtotal >= Number(shippingRates.freeShippingThreshold || 15000)) {
+      shippingFee = 0;
+    } else if (deliveryMethod === "DOMEX_COURIER") {
+      shippingFee = isColombo
+        ? Number(shippingRates.colomboCourierFee || 350)
+        : Number(shippingRates.outOfColomboCourierFee || 450);
     } else if (deliveryMethod === "PICKME_FLASH") {
-      shippingFee = 650; // PickMe Flash estimate
+      shippingFee = 650;
     } else if (deliveryMethod.startsWith("STORE_PICKUP")) {
-      shippingFee = 0; // Free pickup at Colombo / Kurunegala
+      shippingFee = 0;
     }
 
     const totalAmount = subtotal + shippingFee;
     const orderNumber = await generateOrderNumber();
+
+    const formattedNotes = deliveryTimeSlot
+      ? notes
+        ? `${notes} | Courier Delivery Slot: ${deliveryTimeSlot}`
+        : `Courier Delivery Slot: ${deliveryTimeSlot}`
+      : notes;
 
     // 5. Create Order atomically
     const order = await prisma.order.create({
@@ -147,8 +172,11 @@ router.post("/", authenticateToken, async (req: AuthenticatedRequest, res: Respo
         shippingFee,
         totalAmount,
         deliveryMethod,
-        shippingAddress,
-        notes,
+        shippingAddress: {
+          ...shippingAddress,
+          deliveryTimeSlot: deliveryTimeSlot || shippingAddress.deliveryTimeSlot || null,
+        },
+        notes: formattedNotes,
         items: {
           create: orderItemData,
         },

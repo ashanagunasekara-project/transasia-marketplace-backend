@@ -8,7 +8,15 @@ router.get("/public", async (req: Request, res: Response) => {
     const settings = await prisma.storeSetting.findMany({
       where: {
         key: {
-          in: ["cod_enabled", "store_pickup_locations", "store_contact", "otp_max_retries", "site_logo", "store_profile"],
+          in: [
+            "cod_enabled",
+            "store_pickup_locations",
+            "store_contact",
+            "otp_max_retries",
+            "site_logo",
+            "store_profile",
+            "shipping_rates",
+          ],
         },
       },
     });
@@ -29,10 +37,80 @@ router.get("/public", async (req: Request, res: Response) => {
         hotline: "077 339 2727",
         logoUrl: settingsMap.site_logo?.url || "/assets/images/logo/logo.webp",
         storeName: settingsMap.store_profile?.storeName || "Transasia",
+        shippingRates: settingsMap.shipping_rates ?? {
+          colomboCourierFee: 350,
+          outOfColomboCourierFee: 450,
+          freeShippingThreshold: 15000,
+          enableFreeShipping: true,
+        },
       },
     });
   } catch (error: any) {
     res.status(500).json({ success: false, message: "Failed to fetch store settings" });
+  }
+});
+
+router.get("/shipping", async (req: Request, res: Response) => {
+  try {
+    const setting = await prisma.storeSetting.findUnique({
+      where: { key: "shipping_rates" },
+    });
+
+    const data = (setting?.value as any) || {
+      colomboCourierFee: 350,
+      outOfColomboCourierFee: 450,
+      freeShippingThreshold: 15000,
+      enableFreeShipping: true,
+      processingTime: "1-2 business days",
+    };
+
+    res.json({ success: true, data });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: "Failed to fetch shipping settings" });
+  }
+});
+
+router.put("/shipping", async (req: Request, res: Response) => {
+  try {
+    const {
+      colomboCourierFee,
+      outOfColomboCourierFee,
+      freeShippingThreshold,
+      enableFreeShipping,
+      processingTime,
+    } = req.body;
+
+    const saved = await prisma.storeSetting.upsert({
+      where: { key: "shipping_rates" },
+      update: {
+        value: {
+          colomboCourierFee: Number(colomboCourierFee) || 350,
+          outOfColomboCourierFee: Number(outOfColomboCourierFee) || 450,
+          freeShippingThreshold: Number(freeShippingThreshold) || 15000,
+          enableFreeShipping: enableFreeShipping !== undefined ? Boolean(enableFreeShipping) : true,
+          processingTime: processingTime || "1-2 business days",
+        },
+      },
+      create: {
+        key: "shipping_rates",
+        value: {
+          colomboCourierFee: Number(colomboCourierFee) || 350,
+          outOfColomboCourierFee: Number(outOfColomboCourierFee) || 450,
+          freeShippingThreshold: Number(freeShippingThreshold) || 15000,
+          enableFreeShipping: enableFreeShipping !== undefined ? Boolean(enableFreeShipping) : true,
+          processingTime: processingTime || "1-2 business days",
+        },
+        description: "Configurable Sri Lanka courier rates and free shipping rules",
+      },
+    });
+
+    res.json({
+      success: true,
+      message: "Shipping rates updated successfully",
+      data: saved.value,
+    });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: "Failed to update shipping rates" });
   }
 });
 
