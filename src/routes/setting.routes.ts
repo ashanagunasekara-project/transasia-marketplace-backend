@@ -16,6 +16,7 @@ router.get("/public", async (req: Request, res: Response) => {
             "site_logo",
             "store_profile",
             "shipping_rates",
+            "payment_settings",
           ],
         },
       },
@@ -26,10 +27,26 @@ router.get("/public", async (req: Request, res: Response) => {
       settingsMap[s.key] = s.value;
     });
 
+    // Default Bank & Payment details for Transasia
+    const defaultPaymentSettings = {
+      cardEnabled: true,
+      codEnabled: false,
+      bankTransferEnabled: true,
+      acceptedCardBrands: ["visa", "mastercard"],
+      bankDetails: {
+        accountHolder: "TRANS ASIA CELLULAR PVT LTD",
+        accountNumber: "1000060278",
+        bankName: "COMMERCIAL BANK",
+        branchName: "KEYZER STREET BRANCH",
+        instructions:
+          "Please transfer the total amount and WhatsApp your deposit slip with Order ID to 077 339 2727",
+      },
+    };
+
     res.json({
       success: true,
       data: {
-        codEnabled: settingsMap.cod_enabled?.enabled ?? false,
+        codEnabled: settingsMap.payment_settings?.codEnabled ?? (settingsMap.cod_enabled?.enabled ?? false),
         pickupLocations: settingsMap.store_pickup_locations ?? [
           { id: "colombo", name: "Colombo TransAsia Head Office" },
           { id: "kurunegala", name: "Kurunegala Branch" },
@@ -43,10 +60,105 @@ router.get("/public", async (req: Request, res: Response) => {
           freeShippingThreshold: 15000,
           enableFreeShipping: true,
         },
+        paymentSettings: settingsMap.payment_settings ?? defaultPaymentSettings,
       },
     });
   } catch (error: any) {
     res.status(500).json({ success: false, message: "Failed to fetch store settings" });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Payment Settings Endpoints (SOLID - Single Responsibility for Payments)
+// ---------------------------------------------------------------------------
+const DEFAULT_PAYMENT_CONFIG = {
+  cardEnabled: true,
+  codEnabled: false, // Temporarily hidden on storefront as per requirement
+  bankTransferEnabled: true,
+  acceptedCardBrands: ["visa", "mastercard"],
+  bankDetails: {
+    accountHolder: "TRANS ASIA CELLULAR PVT LTD",
+    accountNumber: "1000060278",
+    bankName: "COMMERCIAL BANK",
+    branchName: "KEYZER STREET BRANCH",
+    instructions:
+      "Please transfer the total amount and WhatsApp your deposit slip with Order ID to 077 339 2727",
+  },
+};
+
+router.get("/payments", async (req: Request, res: Response) => {
+  try {
+    const setting = await prisma.storeSetting.findUnique({
+      where: { key: "payment_settings" },
+    });
+
+    const data = (setting?.value as any) || DEFAULT_PAYMENT_CONFIG;
+    res.json({ success: true, data });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: "Failed to fetch payment settings" });
+  }
+});
+
+router.put("/payments", async (req: Request, res: Response) => {
+  try {
+    const { cardEnabled, codEnabled, bankTransferEnabled, acceptedCardBrands, bankDetails } =
+      req.body;
+
+    const currentSetting = await prisma.storeSetting.findUnique({
+      where: { key: "payment_settings" },
+    });
+    const existing = (currentSetting?.value as any) || DEFAULT_PAYMENT_CONFIG;
+
+    const updatedValue = {
+      cardEnabled: cardEnabled !== undefined ? Boolean(cardEnabled) : existing.cardEnabled,
+      codEnabled: codEnabled !== undefined ? Boolean(codEnabled) : existing.codEnabled,
+      bankTransferEnabled:
+        bankTransferEnabled !== undefined ? Boolean(bankTransferEnabled) : existing.bankTransferEnabled,
+      acceptedCardBrands: Array.isArray(acceptedCardBrands)
+        ? acceptedCardBrands
+        : existing.acceptedCardBrands || ["visa", "mastercard"],
+      bankDetails: {
+        accountHolder:
+          bankDetails?.accountHolder?.trim() || existing.bankDetails.accountHolder,
+        accountNumber:
+          bankDetails?.accountNumber?.trim() || existing.bankDetails.accountNumber,
+        bankName: bankDetails?.bankName?.trim() || existing.bankDetails.bankName,
+        branchName: bankDetails?.branchName?.trim() || existing.bankDetails.branchName,
+        instructions:
+          bankDetails?.instructions !== undefined
+            ? String(bankDetails.instructions)
+            : existing.bankDetails.instructions,
+      },
+    };
+
+    const saved = await prisma.storeSetting.upsert({
+      where: { key: "payment_settings" },
+      update: { value: updatedValue },
+      create: {
+        key: "payment_settings",
+        value: updatedValue,
+        description: "Payment methods, accepted card brands, and official bank deposit details",
+      },
+    });
+
+    // Keep legacy cod_enabled in sync for backward compatibility
+    await prisma.storeSetting.upsert({
+      where: { key: "cod_enabled" },
+      update: { value: { enabled: updatedValue.codEnabled } },
+      create: {
+        key: "cod_enabled",
+        value: { enabled: updatedValue.codEnabled },
+        description: "Legacy cash on delivery toggle",
+      },
+    });
+
+    res.json({
+      success: true,
+      message: "Payment settings and bank details updated successfully",
+      data: saved.value,
+    });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: "Failed to update payment settings" });
   }
 });
 
